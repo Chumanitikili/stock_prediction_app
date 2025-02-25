@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 altair==5.5.0
 asttokens==3.0.0
 attrs==24.3.0
@@ -83,3 +84,10 @@ watchdog==6.0.0
 wcwidth==0.2.13
 webencodings==0.5.1
 yfinance==0.2.36
+=======
+﻿streamlit==1.24.0
+pandas==1.5.3
+numpy==1.24.2
+scikit-learn==1.2.2
+matplotlib==3.7.1
+>>>>>>> origin/main
