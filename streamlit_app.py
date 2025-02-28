@@ -6,8 +6,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
+import time
 
-# Check if running in Streamlit or Jupyter
 try:
     import streamlit as st
     IN_STREAMLIT = True
@@ -21,24 +21,40 @@ class StockPredictor:
         self.data = None
         
     def fetch_data(self, ticker, start_date, end_date):
-        """Fetch stock data from Yahoo Finance"""
-        try:
-            self.data = yf.download(ticker, start=start_date, end=end_date)
-            self.data.reset_index(inplace=True)
-            if IN_STREAMLIT:
-                st.success(f"Successfully fetched data for {ticker}")
-            else:
-                print(f"Successfully fetched data for {ticker}")
-            return True
-        except Exception as e:
-            if IN_STREAMLIT:
-                st.error(f"Error fetching data: {e}")
-            else:
-                print(f"Error fetching data: {e}")
-            return False
+        """Fetch stock data from Yahoo Finance with retry"""
+        for _ in range(3):  # Retry up to 3 times
+            try:
+                self.data = yf.download(ticker, start=start_date, end=end_date)
+                self.data.reset_index(inplace=True)
+                if self.data.empty or 'Date' not in self.data.columns:
+                    raise ValueError("No valid data returned")
+                if IN_STREAMLIT:
+                    st.success(f"Successfully fetched data for {ticker}")
+                else:
+                    print(f"Successfully fetched data for {ticker}")
+                return True
+            except Exception as e:
+                if IN_STREAMLIT:
+                    st.warning(f"Retry attempt due to error: {e}")
+                else:
+                    print(f"Retry attempt due to error: {e}")
+                time.sleep(1)  # Wait 1 second before retry
+        if IN_STREAMLIT:
+            st.error(f"Failed to fetch data for {ticker} after retries")
+        else:
+            print(f"Failed to fetch data for {ticker} after retries")
+        return False
     
     def prepare_features(self):
         """Prepare features for prediction"""
+        if self.data is None or self.data.empty:
+            if IN_STREAMLIT:
+                st.error("No data available to process")
+            else:
+                print("Error: No data available to process")
+            return None, None
+        
+        self.data['Date'] = pd.to_datetime(self.data['Date'])  # Ensure datetime
         self.data['MA5'] = self.data['Close'].rolling(window=5).mean()
         self.data['MA20'] = self.data['Close'].rolling(window=20).mean()
         self.data['Days'] = (self.data['Date'] - self.data['Date'].min()).dt.days
@@ -50,7 +66,7 @@ class StockPredictor:
     def train_model(self):
         """Train the prediction model"""
         X, y = self.prepare_features()
-        if len(X) < 2:
+        if X is None or len(X) < 2:
             if IN_STREAMLIT:
                 st.error("Not enough data to train the model after preprocessing")
             else:
@@ -61,9 +77,7 @@ class StockPredictor:
             X, y, test_size=0.2, random_state=42
         )
         
-        # Train with DataFrame (keeps feature names)
         self.model.fit(X_train, y_train)
-
         train_pred = self.model.predict(X_train)
         test_pred = self.model.predict(X_test)
         
@@ -83,7 +97,7 @@ class StockPredictor:
         last_valid_row = self.data[self.features].dropna().iloc[-1]
         future_data = pd.DataFrame({
             'Days': (future_dates - self.data['Date'].min()).days,
-            'MA5': [float(last_valid_row['MA5'].iloc[0])] * days_ahead,  # Fixed with .iloc[0]
+            'MA5': [float(last_valid_row['MA5'].iloc[0])] * days_ahead,
             'MA20': [float(last_valid_row['MA20'].iloc[0])] * days_ahead,
             'Open': [float(last_valid_row['Open'].iloc[0])] * days_ahead,
             'High': [float(last_valid_row['High'].iloc[0])] * days_ahead,
@@ -101,7 +115,6 @@ class StockPredictor:
 predictor = StockPredictor()
 
 if IN_STREAMLIT:
-    # Streamlit interface
     st.title("Stock Price Prediction App")
     ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
     start_date = st.date_input("Start Date", value=datetime(2003, 1, 1))
@@ -126,7 +139,6 @@ if IN_STREAMLIT:
                 fig.update_layout(title=f"{ticker} Stock Price Prediction", xaxis_title="Date", yaxis_title="Price", legend=dict(x=0, y=1))
                 st.plotly_chart(fig)
 else:
-    # Jupyter interface
     ticker = "AAPL"
     start_date = datetime(2003, 1, 1)
     end_date = datetime(2023, 12, 31)
