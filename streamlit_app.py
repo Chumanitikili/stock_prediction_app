@@ -42,7 +42,6 @@ class StockPredictor:
                         print(f"Attempt {attempt + 1} failed: {e}. Retrying in {2**attempt} seconds...")
                     time.sleep(2**attempt)
         
-        # Fallback to demo data
         if IN_STREAMLIT:
             st.warning(f"All attempts failed for {ticker}. Using demo data.")
         else:
@@ -69,7 +68,7 @@ class StockPredictor:
         self.data['Date'] = pd.to_datetime(self.data['Date'])
         self.data['MA5'] = self.data['Close'].rolling(window=5).mean()
         self.data['MA20'] = self.data['Close'].rolling(window=20).mean()
-        self.data['RSI'] = rsi(self.data['Close'], length=14)  # Add RSI
+        self.data['RSI'] = rsi(self.data['Close'], length=14)
         self.data['Days'] = (self.data['Date'] - self.data['Date'].min()).dt.days
         self.data = self.data.dropna()
         self.features = ['Days', 'MA5', 'MA20', 'RSI', 'Open', 'High', 'Low', 'Volume']
@@ -110,13 +109,13 @@ class StockPredictor:
         last_valid_row = self.data[self.features].dropna().iloc[-1]
         future_data = pd.DataFrame({
             'Days': (future_dates - self.data['Date'].min()).days,
-            'MA5': [float(last_valid_row['MA5'].iloc[0])] * days_ahead,
-            'MA20': [float(last_valid_row['MA20'].iloc[0])] * days_ahead,
-            'RSI': [float(last_valid_row['RSI'].iloc[0])] * days_ahead,
-            'Open': [float(last_valid_row['Open'].iloc[0])] * days_ahead,
-            'High': [float(last_valid_row['High'].iloc[0])] * days_ahead,
-            'Low': [float(last_valid_row['Low'].iloc[0])] * days_ahead,
-            'Volume': [float(last_valid_row['Volume'].iloc[0])] * days_ahead
+            'MA5': [float(last_valid_row['MA5'])] * days_ahead,  # Fixed: Removed .iloc[0]
+            'MA20': [float(last_valid_row['MA20'])] * days_ahead,
+            'RSI': [float(last_valid_row['RSI'])] * days_ahead,
+            'Open': [float(last_valid_row['Open'])] * days_ahead,
+            'High': [float(last_valid_row['High'])] * days_ahead,
+            'Low': [float(last_valid_row['Low'])] * days_ahead,
+            'Volume': [float(last_valid_row['Volume'])] * days_ahead
         })
         
         future_predictions = self.model.predict(future_data[self.features])
