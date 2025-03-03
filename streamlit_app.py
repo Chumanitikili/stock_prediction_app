@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 import time
+from pandas_ta import rsi
 
 try:
     import streamlit as st
@@ -21,32 +22,43 @@ class StockPredictor:
         self.data = None
         
     def fetch_data(self, ticker, start_date, end_date):
-        """Fetch stock data from Yahoo Finance with retry"""
-        for _ in range(3):  # Retry up to 3 times
-            try:
-                self.data = yf.download(ticker, start=start_date, end=end_date)
-                self.data.reset_index(inplace=True)
-                if self.data.empty or 'Date' not in self.data.columns:
-                    raise ValueError("No valid data returned")
-                if IN_STREAMLIT:
-                    st.success(f"Successfully fetched data for {ticker}")
-                else:
-                    print(f"Successfully fetched data for {ticker}")
-                return True
-            except Exception as e:
-                if IN_STREAMLIT:
-                    st.warning(f"Retry attempt due to error: {e}")
-                else:
-                    print(f"Retry attempt due to error: {e}")
-                time.sleep(1)  # Wait 1 second before retry
+        """Fetch stock data with retries and fallback"""
+        with st.spinner(f"Fetching data for {ticker}...") if IN_STREAMLIT else None:
+            for attempt in range(5):
+                try:
+                    self.data = yf.download(ticker, start=start_date, end=end_date)
+                    self.data.reset_index(inplace=True)
+                    if self.data.empty or 'Date' not in self.data.columns:
+                        raise ValueError("No valid data returned")
+                    if IN_STREAMLIT:
+                        st.info(f"Successfully fetched data for {ticker}")
+                    else:
+                        print(f"Successfully fetched data for {ticker}")
+                    return True
+                except Exception as e:
+                    if IN_STREAMLIT:
+                        st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {2**attempt} seconds...")
+                    else:
+                        print(f"Attempt {attempt + 1} failed: {e}. Retrying in {2**attempt} seconds...")
+                    time.sleep(2**attempt)
+        
+        # Fallback to demo data
         if IN_STREAMLIT:
-            st.error(f"Failed to fetch data for {ticker} after retries")
+            st.warning(f"All attempts failed for {ticker}. Using demo data.")
         else:
-            print(f"Failed to fetch data for {ticker} after retries")
-        return False
+            print(f"All attempts failed for {ticker}. Using demo data.")
+        self.data = pd.DataFrame({
+            'Date': pd.date_range(start='2023-01-01', periods=100, freq='D'),
+            'Open': np.random.rand(100) * 100 + 100,
+            'High': np.random.rand(100) * 100 + 105,
+            'Low': np.random.rand(100) * 100 + 95,
+            'Close': np.random.rand(100) * 100 + 100,
+            'Volume': np.random.randint(1000, 10000, 100)
+        })
+        return True
     
     def prepare_features(self):
-        """Prepare features for prediction"""
+        """Prepare features with RSI"""
         if self.data is None or self.data.empty:
             if IN_STREAMLIT:
                 st.error("No data available to process")
@@ -54,12 +66,13 @@ class StockPredictor:
                 print("Error: No data available to process")
             return None, None
         
-        self.data['Date'] = pd.to_datetime(self.data['Date'])  # Ensure datetime
+        self.data['Date'] = pd.to_datetime(self.data['Date'])
         self.data['MA5'] = self.data['Close'].rolling(window=5).mean()
         self.data['MA20'] = self.data['Close'].rolling(window=20).mean()
+        self.data['RSI'] = rsi(self.data['Close'], length=14)  # Add RSI
         self.data['Days'] = (self.data['Date'] - self.data['Date'].min()).dt.days
         self.data = self.data.dropna()
-        self.features = ['Days', 'MA5', 'MA20', 'Open', 'High', 'Low', 'Volume']
+        self.features = ['Days', 'MA5', 'MA20', 'RSI', 'Open', 'High', 'Low', 'Volume']
         self.target = 'Close'
         return self.data[self.features], self.data[self.target]
     
@@ -99,6 +112,7 @@ class StockPredictor:
             'Days': (future_dates - self.data['Date'].min()).days,
             'MA5': [float(last_valid_row['MA5'].iloc[0])] * days_ahead,
             'MA20': [float(last_valid_row['MA20'].iloc[0])] * days_ahead,
+            'RSI': [float(last_valid_row['RSI'].iloc[0])] * days_ahead,
             'Open': [float(last_valid_row['Open'].iloc[0])] * days_ahead,
             'High': [float(last_valid_row['High'].iloc[0])] * days_ahead,
             'Low': [float(last_valid_row['Low'].iloc[0])] * days_ahead,
