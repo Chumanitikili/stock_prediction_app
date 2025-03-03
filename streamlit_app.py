@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 import time
+import random
 from pandas_ta import rsi
 
 try:
@@ -24,7 +25,7 @@ class StockPredictor:
     def fetch_data(self, ticker, start_date, end_date):
         """Fetch stock data with retries and fallback"""
         with st.spinner(f"Fetching data for {ticker}...") if IN_STREAMLIT else None:
-            for attempt in range(5):
+            for attempt in range(10):  # Increased retries
                 try:
                     self.data = yf.download(ticker, start=start_date, end=end_date)
                     self.data.reset_index(inplace=True)
@@ -36,14 +37,16 @@ class StockPredictor:
                         print(f"Successfully fetched data for {ticker}")
                     return True
                 except Exception as e:
+                    delay = 2**attempt + random.uniform(0, 1)  # Exponential backoff with jitter
                     if IN_STREAMLIT:
-                        st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {2**attempt} seconds...")
+                        st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f} seconds...")
                     else:
-                        print(f"Attempt {attempt + 1} failed: {e}. Retrying in {2**attempt} seconds...")
-                    time.sleep(2**attempt)
+                        print(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f} seconds...")
+                    time.sleep(delay)
         
+        # Fallback to demo data with full structure
         if IN_STREAMLIT:
-            st.warning(f"All attempts failed for {ticker}. Using demo data.")
+            st.info(f"All attempts failed for {ticker}. Using demo data.")
         else:
             print(f"All attempts failed for {ticker}. Using demo data.")
         self.data = pd.DataFrame({
@@ -52,6 +55,7 @@ class StockPredictor:
             'High': np.random.rand(100) * 100 + 105,
             'Low': np.random.rand(100) * 100 + 95,
             'Close': np.random.rand(100) * 100 + 100,
+            'Adj Close': np.random.rand(100) * 100 + 100,  # Match yfinance structure
             'Volume': np.random.randint(1000, 10000, 100)
         })
         return True
@@ -109,7 +113,7 @@ class StockPredictor:
         last_valid_row = self.data[self.features].dropna().iloc[-1]
         future_data = pd.DataFrame({
             'Days': (future_dates - self.data['Date'].min()).days,
-            'MA5': [float(last_valid_row['MA5'])] * days_ahead,  # Fixed: Removed .iloc[0]
+            'MA5': [float(last_valid_row['MA5'])] * days_ahead,
             'MA20': [float(last_valid_row['MA20'])] * days_ahead,
             'RSI': [float(last_valid_row['RSI'])] * days_ahead,
             'Open': [float(last_valid_row['Open'])] * days_ahead,
