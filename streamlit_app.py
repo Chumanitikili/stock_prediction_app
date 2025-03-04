@@ -26,29 +26,33 @@ MARKET_TICKERS = {
         'Emerging Markets': ['USDCNY=X', 'USDINR=X', 'USDBRL=X', 'USDMXN=X', 'USDRUB=X']
     },
     'Indices': {
-        'NASDAQ': ['^IXIC'],  # NASDAQ Composite
-        'US': ['^DJI', '^GSPC'],  # Dow Jones, S&P 500
-        'Global': ['^N225', '^FTSE', '^GDAXI', '^HSI', '^BSESN']  # Japan, UK, Germany, Hong Kong, India
+        'NASDAQ': ['^IXIC'],
+        'US': ['^DJI', '^GSPC'],
+        'Global': ['^N225', '^FTSE', '^GDAXI', '^HSI', '^BSESN']
     }
 }
 
-# Alpha Vantage API Key (replace with your own from https://www.alphavantage.co/)
-ALPHA_VANTAGE_API_KEY = "NZ8IP791ZRUHK4LL"
+# Replace with your Alpha Vantage API key
+ALPHA_VANTAGE_API_KEY = NZ8IP791ZRUHK4LL
 
 def fetch_stock_data(ticker, start_date, end_date):
     """Fetch stock data with yfinance and Alpha Vantage fallback"""
+    min_days = 10  # Minimum days needed for preprocessing
+    if (end_date - start_date).days < min_days:
+        st.error(f"Date range must be at least {min_days} days. Please adjust your selection.")
+        return None
+
     with st.spinner(f"Fetching data for {ticker}..."):
-        # Try yfinance first
-        for attempt in range(5):  # Reduced retries to prevent timeout
+        for attempt in range(5):
             try:
                 df = yf.download(ticker, start=start_date, end=end_date)
                 df.reset_index(inplace=True)
-                if df.empty or 'Date' not in df.columns:
-                    raise ValueError("No valid data returned")
+                if df.empty or 'Date' not in df.columns or len(df) < min_days:
+                    raise ValueError(f"Insufficient data returned for {ticker}")
                 st.info(f"Successfully fetched {ticker} data from Yahoo Finance")
                 return df
             except Exception as e:
-                delay = min(2**attempt + random.uniform(0, 1), 10)  # Cap at 10s
+                delay = min(2**attempt + random.uniform(0, 1), 10)
                 st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f} seconds...")
                 time.sleep(delay)
         
@@ -66,34 +70,32 @@ def fetch_stock_data(ticker, start_date, end_date):
             df = df.astype(float)
             df = df.reset_index().rename(columns={"index": "Date"})
             df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
-            if df.empty:
-                raise ValueError("No data in date range")
+            if len(df) < min_days:
+                raise ValueError(f"Insufficient data from Alpha Vantage for {ticker}")
             st.info(f"Successfully fetched {ticker} data from Alpha Vantage")
             return df
         except Exception as e:
             st.error(f"Alpha Vantage failed: {e}. Using demo data.")
-            # Demo data
             df = pd.DataFrame({
-                'Date': pd.date_range(start=start_date, periods=200, freq='D'),
-                'Open': np.random.rand(200) * 100 + 100,
-                'High': np.random.rand(200) * 100 + 105,
-                'Low': np.random.rand(200) * 100 + 95,
-                'Close': np.random.rand(200) * 100 + 100,
-                'Volume': np.random.randint(1000, 10000, 200)
+                'Date': pd.date_range(start=start_date, periods=max(200, (end_date - start_date).days), freq='D'),
+                'Open': np.random.rand(max(200, (end_date - start_date).days)) * 100 + 100,
+                'High': np.random.rand(max(200, (end_date - start_date).days)) * 100 + 105,
+                'Low': np.random.rand(max(200, (end_date - start_date).days)) * 100 + 95,
+                'Close': np.random.rand(max(200, (end_date - start_date).days)) * 100 + 100,
+                'Volume': np.random.randint(1000, 10000, max(200, (end_date - start_date).days))
             })
             return df
 
 def prepare_data(df, look_back=5):
     """Prepare data for LSTM with minimal preprocessing"""
     if df is None or len(df) < look_back + 1:
-        st.error("Insufficient data for processing")
+        st.error(f"Insufficient raw data for processing (need at least {look_back + 1} days)")
         return None, None, None
     
-    # Add technical indicators
-    df['MA3'] = df['Close'].rolling(window=3).mean()
-    df['MA5'] = df['Close'].rolling(window=5).mean()
-    df['RSI'] = rsi(df['Close'], length=5)
-    df = df.dropna()
+    # Add technical indicators with fill to minimize NaN loss
+    df['MA3'] = df['Close'].rolling(window=3, min_periods=1).mean().fillna(method='bfill')
+    df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean().fillna(method='bfill')
+    df['RSI'] = rsi(df['Close'], length=5).fillna(method='bfill')
     
     if len(df) < 2:
         st.error("Not enough data after preprocessing")
@@ -133,13 +135,13 @@ def plot_predictions(df, predictions, scaler, ticker):
     """Plot actual vs predicted prices"""
     actual_prices = df['Close'].values[-len(predictions):].reshape(-1, 1)
     pred_array = np.zeros((len(predictions), 4))  # Match scaler input shape
-    pred_array[:, 0] = predictions.flatten()  # Only 'Close' column
+    pred_array[:, 0] = predictions.flatten()
     predictions = scaler.inverse_transform(pred_array)[:, 0]
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df['Date'][-len(predictions):], y=actual_prices.flatten(), mode='lines', name='Actual Price'))
     fig.add_trace(go.Scatter(x=df['Date'][-len(predictions):], y=predictions, mode='lines', name='Predicted Price', line=dict(dash='dash')))
-    fig.update_layout(title=f"{ticker} Price Prediction", xaxis_title="Date", yaxis_title="Price", legend=dict(x=0, y=1))
+    fig.update_layout(title=f"{ticker} Historical Prediction", xaxis_title="Date", yaxis_title="Price", legend=dict(x=0, y=1))
     st.plotly_chart(fig)
 
 def main():
@@ -150,7 +152,7 @@ def main():
     category = st.selectbox('Select Category', list(MARKET_TICKERS[market].keys()))
     ticker = st.selectbox('Select Ticker', MARKET_TICKERS[market][category])
     
-    # Date Range
+    # Date Range with validation
     start_date = st.date_input("Start Date", value=datetime(2023, 1, 1))
     end_date = st.date_input("End Date", value=datetime(2023, 12, 31))
     
