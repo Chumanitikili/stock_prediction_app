@@ -33,7 +33,7 @@ MARKET_TICKERS = {
 }
 
 # Replace with your Alpha Vantage API key
-ALPHA_VANTAGE_API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"  # Replace with your actual API key
+ALPHA_VANTAGE_API_KEY = "NZ8IP791ZRUHK4LL"  
 
 def fetch_stock_data(ticker, start_date, end_date):
     min_days = 10  # Minimum days needed for preprocessing
