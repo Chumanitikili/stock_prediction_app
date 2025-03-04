@@ -36,7 +36,6 @@ MARKET_TICKERS = {
 ALPHA_VANTAGE_API_KEY = "NZ8IP791ZRUHK4LL"
 
 def fetch_stock_data(ticker, start_date, end_date):
-    """Fetch stock data with yfinance and Alpha Vantage fallback"""
     min_days = 10  # Minimum days needed for preprocessing
     if (end_date - start_date).days < min_days:
         st.error(f"Date range must be at least {min_days} days. Please adjust your selection.")
@@ -87,15 +86,27 @@ def fetch_stock_data(ticker, start_date, end_date):
             return df
 
 def prepare_data(df, look_back=5):
-    """Prepare data for LSTM with minimal preprocessing"""
     if df is None or len(df) < look_back + 1:
         st.error(f"Insufficient raw data for processing (need at least {look_back + 1} days)")
         return None, None, None
     
-    # Add technical indicators with fill to minimize NaN loss
-    df['MA3'] = df['Close'].rolling(window=3, min_periods=1).mean().fillna(method='bfill')
-    df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean().fillna(method='bfill')
-    df['RSI'] = rsi(df['Close'], length=5).fillna(method='bfill')
+    # Check for NaN in 'Close'
+    if df['Close'].hasnans:
+        st.error("Close price has NaN values. Please ensure data is complete.")
+        return None, None, None
+    
+    try:
+        # Add technical indicators with fill to minimize NaN loss
+        df['MA3'] = df['Close'].rolling(window=3, min_periods=1).mean().fillna(method='bfill')
+        df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean().fillna(method='bfill')
+        rsi_series = rsi(df['Close'], length=5)
+        if not isinstance(rsi_series, pd.Series):
+            st.error("RSI did not return a pandas Series")
+            return None, None, None
+        df['RSI'] = rsi_series.fillna(method='bfill')
+    except Exception as e:
+        st.error(f"Error calculating RSI: {e}")
+        return None, None, None
     
     if len(df) < 2:
         st.error("Not enough data after preprocessing")
@@ -119,7 +130,6 @@ def prepare_data(df, look_back=5):
     return X, y, scaler
 
 def create_lstm_model(input_shape):
-    """Create LSTM model"""
     model = Sequential([
         LSTM(units=50, return_sequences=True, input_shape=input_shape),
         Dropout(0.2),
@@ -132,7 +142,6 @@ def create_lstm_model(input_shape):
     return model
 
 def plot_predictions(df, predictions, scaler, ticker):
-    """Plot actual vs predicted prices"""
     actual_prices = df['Close'].values[-len(predictions):].reshape(-1, 1)
     pred_array = np.zeros((len(predictions), 4))  # Match scaler input shape
     pred_array[:, 0] = predictions.flatten()
@@ -153,7 +162,7 @@ def main():
     ticker = st.selectbox('Select Ticker', MARKET_TICKERS[market][category])
     
     # Date Range with validation
-    start_date = st.date_input("Start Date", value=datetime(2023, 1, 1))
+    start_date = st.date_input("Start Date", value=datetime(2022, 1, 1))  # Extended to ensure more data
     end_date = st.date_input("End Date", value=datetime(2023, 12, 31))
     
     # Prediction Horizon
