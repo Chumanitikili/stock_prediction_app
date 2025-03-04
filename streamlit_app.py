@@ -1,179 +1,203 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 import plotly.graph_objects as go
 import time
 import random
 from pandas_ta import rsi
+from datetime import datetime, timedelta
+import requests
 
-try:
-    import streamlit as st
-    IN_STREAMLIT = True
-except ImportError:
-    IN_STREAMLIT = False
-    from IPython.display import display
+# Enhanced Market Tickers Dictionary
+MARKET_TICKERS = {
+    'US Stocks': {
+        'Technology': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA'],
+        'Finance': ['JPM', 'BAC', 'WFC', 'GS', 'MS'],
+        'Healthcare': ['JNJ', 'PFE', 'UNH', 'MRK', 'ABT'],
+        'Energy': ['XOM', 'CVX', 'COP', 'EOG', 'SLB']
+    },
+    'Forex': {
+        'Major Pairs': ['EURUSD=X', 'USDJPY=X', 'GBPUSD=X', 'AUDUSD=X', 'USDCAD=X'],
+        'Emerging Markets': ['USDCNY=X', 'USDINR=X', 'USDBRL=X', 'USDMXN=X', 'USDRUB=X']
+    },
+    'Indices': {
+        'NASDAQ': ['^IXIC'],  # NASDAQ Composite
+        'US': ['^DJI', '^GSPC'],  # Dow Jones, S&P 500
+        'Global': ['^N225', '^FTSE', '^GDAXI', '^HSI', '^BSESN']  # Japan, UK, Germany, Hong Kong, India
+    }
+}
 
-class StockPredictor:
-    def __init__(self):
-        self.model = LinearRegression()
-        self.data = None
+# Alpha Vantage API Key (replace with your own from https://www.alphavantage.co/)
+ALPHA_VANTAGE_API_KEY = "NZ8IP791ZRUHK4LL"
+
+def fetch_stock_data(ticker, start_date, end_date):
+    """Fetch stock data with yfinance and Alpha Vantage fallback"""
+    with st.spinner(f"Fetching data for {ticker}..."):
+        # Try yfinance first
+        for attempt in range(5):  # Reduced retries to prevent timeout
+            try:
+                df = yf.download(ticker, start=start_date, end=end_date)
+                df.reset_index(inplace=True)
+                if df.empty or 'Date' not in df.columns:
+                    raise ValueError("No valid data returned")
+                st.info(f"Successfully fetched {ticker} data from Yahoo Finance")
+                return df
+            except Exception as e:
+                delay = min(2**attempt + random.uniform(0, 1), 10)  # Cap at 10s
+                st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
         
-    def fetch_data(self, ticker, start_date, end_date):
-        """Fetch stock data with retries and fallback"""
-        with st.spinner(f"Fetching data for {ticker}...") if IN_STREAMLIT else None:
-            for attempt in range(10):  # Increased retries
-                try:
-                    self.data = yf.download(ticker, start=start_date, end=end_date)
-                    self.data.reset_index(inplace=True)
-                    if self.data.empty or 'Date' not in self.data.columns:
-                        raise ValueError("No valid data returned")
-                    if IN_STREAMLIT:
-                        st.info(f"Successfully fetched data for {ticker}")
-                    else:
-                        print(f"Successfully fetched data for {ticker}")
-                    return True
-                except Exception as e:
-                    delay = 2**attempt + random.uniform(0, 1)  # Exponential backoff with jitter
-                    if IN_STREAMLIT:
-                        st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f} seconds...")
-                    else:
-                        print(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f} seconds...")
-                    time.sleep(delay)
-        
-        # Fallback to demo data with full structure
-        if IN_STREAMLIT:
-            st.info(f"All attempts failed for {ticker}. Using demo data.")
-        else:
-            print(f"All attempts failed for {ticker}. Using demo data.")
-        self.data = pd.DataFrame({
-            'Date': pd.date_range(start='2023-01-01', periods=100, freq='D'),
-            'Open': np.random.rand(100) * 100 + 100,
-            'High': np.random.rand(100) * 100 + 105,
-            'Low': np.random.rand(100) * 100 + 95,
-            'Close': np.random.rand(100) * 100 + 100,
-            'Adj Close': np.random.rand(100) * 100 + 100,  # Match yfinance structure
-            'Volume': np.random.randint(1000, 10000, 100)
-        })
-        return True
+        # Fallback to Alpha Vantage
+        st.warning(f"Yahoo Finance failed for {ticker}. Trying Alpha Vantage...")
+        try:
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={ALPHA_VANTAGE_API_KEY}&outputsize=full"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            if "Time Series (Daily)" not in data:
+                raise ValueError("Invalid response from Alpha Vantage")
+            df = pd.DataFrame(data["Time Series (Daily)"]).T
+            df = df.rename(columns={"1. open": "Open", "2. high": "High", "3. low": "Low", "4. close": "Close", "5. volume": "Volume"})
+            df.index = pd.to_datetime(df.index)
+            df = df.astype(float)
+            df = df.reset_index().rename(columns={"index": "Date"})
+            df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+            if df.empty:
+                raise ValueError("No data in date range")
+            st.info(f"Successfully fetched {ticker} data from Alpha Vantage")
+            return df
+        except Exception as e:
+            st.error(f"Alpha Vantage failed: {e}. Using demo data.")
+            # Demo data
+            df = pd.DataFrame({
+                'Date': pd.date_range(start=start_date, periods=200, freq='D'),
+                'Open': np.random.rand(200) * 100 + 100,
+                'High': np.random.rand(200) * 100 + 105,
+                'Low': np.random.rand(200) * 100 + 95,
+                'Close': np.random.rand(200) * 100 + 100,
+                'Volume': np.random.randint(1000, 10000, 200)
+            })
+            return df
+
+def prepare_data(df, look_back=5):
+    """Prepare data for LSTM with minimal preprocessing"""
+    if df is None or len(df) < look_back + 1:
+        st.error("Insufficient data for processing")
+        return None, None, None
     
-    def prepare_features(self):
-        """Prepare features with RSI"""
-        if self.data is None or self.data.empty:
-            if IN_STREAMLIT:
-                st.error("No data available to process")
-            else:
-                print("Error: No data available to process")
-            return None, None
-        
-        self.data['Date'] = pd.to_datetime(self.data['Date'])
-        self.data['MA5'] = self.data['Close'].rolling(window=5).mean()
-        self.data['MA20'] = self.data['Close'].rolling(window=20).mean()
-        self.data['RSI'] = rsi(self.data['Close'], length=14)
-        self.data['Days'] = (self.data['Date'] - self.data['Date'].min()).dt.days
-        self.data = self.data.dropna()
-        self.features = ['Days', 'MA5', 'MA20', 'RSI', 'Open', 'High', 'Low', 'Volume']
-        self.target = 'Close'
-        return self.data[self.features], self.data[self.target]
+    # Add technical indicators
+    df['MA3'] = df['Close'].rolling(window=3).mean()
+    df['MA5'] = df['Close'].rolling(window=5).mean()
+    df['RSI'] = rsi(df['Close'], length=5)
+    df = df.dropna()
     
-    def train_model(self):
-        """Train the prediction model"""
-        X, y = self.prepare_features()
-        if X is None or len(X) < 2:
-            if IN_STREAMLIT:
-                st.error("Not enough data to train the model after preprocessing")
-            else:
-                print("Error: Not enough data to train the model after preprocessing")
-            return None
-        
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-        
-        self.model.fit(X_train, y_train)
-        train_pred = self.model.predict(X_train)
-        test_pred = self.model.predict(X_test)
-        
-        metrics = {
-            'train_score': r2_score(y_train, train_pred),
-            'test_score': r2_score(y_test, test_pred),
-            'train_mse': mean_squared_error(y_train, train_pred),
-            'test_mse': mean_squared_error(y_test, test_pred),
-        }
-        return metrics
+    if len(df) < 2:
+        st.error("Not enough data after preprocessing")
+        return None, None, None
     
-    def predict_future(self, days_ahead=30):
-        """Predict future stock prices"""
-        last_date = self.data['Date'].max()
-        future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=days_ahead, freq='D')
-        
-        last_valid_row = self.data[self.features].dropna().iloc[-1]
-        future_data = pd.DataFrame({
-            'Days': (future_dates - self.data['Date'].min()).days,
-            'MA5': [float(last_valid_row['MA5'])] * days_ahead,
-            'MA20': [float(last_valid_row['MA20'])] * days_ahead,
-            'RSI': [float(last_valid_row['RSI'])] * days_ahead,
-            'Open': [float(last_valid_row['Open'])] * days_ahead,
-            'High': [float(last_valid_row['High'])] * days_ahead,
-            'Low': [float(last_valid_row['Low'])] * days_ahead,
-            'Volume': [float(last_valid_row['Volume'])] * days_ahead
-        })
-        
-        future_predictions = self.model.predict(future_data[self.features])
-        if future_predictions.ndim > 1:
-            future_predictions = future_predictions.flatten()
-        
-        return pd.DataFrame({'Date': future_dates, 'Predicted_Close': future_predictions})
+    # Prepare features
+    features = ['Close', 'MA3', 'MA5', 'RSI']
+    data = df[features].values
+    
+    # Normalize
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(data)
+    
+    # Create sequences
+    X, y = [], []
+    for i in range(look_back, len(scaled_data)):
+        X.append(scaled_data[i-look_back:i])
+        y.append(scaled_data[i, 0])  # Predict 'Close'
+    
+    X, y = np.array(X), np.array(y)
+    return X, y, scaler
 
-# Main execution
-predictor = StockPredictor()
+def create_lstm_model(input_shape):
+    """Create LSTM model"""
+    model = Sequential([
+        LSTM(units=50, return_sequences=True, input_shape=input_shape),
+        Dropout(0.2),
+        LSTM(units=50),
+        Dropout(0.2),
+        Dense(25, activation='relu'),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    return model
 
-if IN_STREAMLIT:
-    st.title("Stock Price Prediction App")
-    ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
-    start_date = st.date_input("Start Date", value=datetime(2003, 1, 1))
+def plot_predictions(df, predictions, scaler, ticker):
+    """Plot actual vs predicted prices"""
+    actual_prices = df['Close'].values[-len(predictions):].reshape(-1, 1)
+    pred_array = np.zeros((len(predictions), 4))  # Match scaler input shape
+    pred_array[:, 0] = predictions.flatten()  # Only 'Close' column
+    predictions = scaler.inverse_transform(pred_array)[:, 0]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['Date'][-len(predictions):], y=actual_prices.flatten(), mode='lines', name='Actual Price'))
+    fig.add_trace(go.Scatter(x=df['Date'][-len(predictions):], y=predictions, mode='lines', name='Predicted Price', line=dict(dash='dash')))
+    fig.update_layout(title=f"{ticker} Price Prediction", xaxis_title="Date", yaxis_title="Price", legend=dict(x=0, y=1))
+    st.plotly_chart(fig)
+
+def main():
+    st.title('Financial Market Prediction App')
+    
+    # Market and Category Selection
+    market = st.selectbox('Select Market', list(MARKET_TICKERS.keys()))
+    category = st.selectbox('Select Category', list(MARKET_TICKERS[market].keys()))
+    ticker = st.selectbox('Select Ticker', MARKET_TICKERS[market][category])
+    
+    # Date Range
+    start_date = st.date_input("Start Date", value=datetime(2023, 1, 1))
     end_date = st.date_input("End Date", value=datetime(2023, 12, 31))
+    
+    # Prediction Horizon
     days_ahead = st.slider("Days to Predict Ahead", 1, 60, 30)
     
-    if st.button("Analyze Stock"):
-        if predictor.fetch_data(ticker, start_date, end_date):
-            st.subheader(f"{ticker} Historical Data")
-            st.write(predictor.data.tail())
-            metrics = predictor.train_model()
-            if metrics:
-                st.subheader("Model Performance")
-                st.write(f"Training R² Score: {metrics['train_score']:.4f}")
-                st.write(f"Test R² Score: {metrics['test_score']:.4f}")
-                st.write(f"Training MSE: {metrics['train_mse']:.2f}")
-                st.write(f"Test MSE: {metrics['test_mse']:.2f}")
-                future_df = predictor.predict_future(days_ahead)
+    if st.button('Predict Prices'):
+        df = fetch_stock_data(ticker, start_date, end_date)
+        
+        if df is not None:
+            # Prepare data
+            X, y, scaler = prepare_data(df)
+            
+            if X is not None and y is not None:
+                # Split data
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                
+                # Train LSTM
+                model = create_lstm_model(input_shape=(X.shape[1], X.shape[2]))
+                with st.spinner("Training model..."):
+                    model.fit(X_train, y_train, epochs=20, batch_size=32, validation_split=0.2, verbose=0)
+                
+                # Make predictions
+                predictions = model.predict(X_test)
+                
+                # Plot historical predictions
+                st.subheader("Historical Prediction vs Actual")
+                plot_predictions(df, predictions, scaler, ticker)
+                
+                # Future predictions
+                last_sequence = X[-1:]
+                future_preds = []
+                for _ in range(days_ahead):
+                    next_pred = model.predict(last_sequence, verbose=0)
+                    future_preds.append(next_pred[0, 0])
+                    last_sequence = np.roll(last_sequence, -1, axis=1)
+                    last_sequence[0, -1] = np.append(next_pred, last_sequence[0, -1, 1:]).reshape(1, -1)
+                
+                future_dates = pd.date_range(start=df['Date'].max() + timedelta(days=1), periods=days_ahead, freq='D')
+                future_df = pd.DataFrame({'Date': future_dates, 'Predicted_Close': scaler.inverse_transform(np.array(future_preds).reshape(-1, 4))[:, 0]})
+                
+                st.subheader("Future Price Prediction")
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=predictor.data['Date'], y=predictor.data['Close'], mode='lines', name='Historical'))
+                fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], mode='lines', name='Historical'))
                 fig.add_trace(go.Scatter(x=future_df['Date'], y=future_df['Predicted_Close'], mode='lines', name='Predicted', line=dict(dash='dash')))
-                fig.update_layout(title=f"{ticker} Stock Price Prediction", xaxis_title="Date", yaxis_title="Price", legend=dict(x=0, y=1))
+                fig.update_layout(title=f"{ticker} Future Prediction", xaxis_title="Date", yaxis_title="Price")
                 st.plotly_chart(fig)
-else:
-    ticker = "AAPL"
-    start_date = datetime(2003, 1, 1)
-    end_date = datetime(2023, 12, 31)
-    days_ahead = 30
-    
-    if predictor.fetch_data(ticker, start_date, end_date):
-        print(f"{ticker} Historical Data (Last 5 rows):")
-        display(predictor.data.tail())
-        metrics = predictor.train_model()
-        if metrics:
-            print("Model Performance:")
-            print(f"Training R² Score: {metrics['train_score']:.4f}")
-            print(f"Test R² Score: {metrics['test_score']:.4f}")
-            print(f"Training MSE: {metrics['train_mse']:.2f}")
-            print(f"Test MSE: {metrics['test_mse']:.2f}")
-            future_df = predictor.predict_future(days_ahead)
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=predictor.data['Date'], y=predictor.data['Close'], mode='lines', name='Historical'))
-            fig.add_trace(go.Scatter(x=future_df['Date'], y=future_df['Predicted_Close'], mode='lines', name='Predicted', line=dict(dash='dash')))
-            fig.update_layout(title=f"{ticker} Stock Price Prediction", xaxis_title="Date", yaxis_title="Price", legend=dict(x=0, y=1))
-            fig.show()
+
+if __name__ == '__main__':
+    main()

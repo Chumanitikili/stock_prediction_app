@@ -18,3 +18,5 @@ matplotlib==3.7.1
 altair==4.2.2
 pandas_ta==0.3.14b0
 setuptools==69.1.1
+tensorflow==2.16.1
+requests==2.32.3
