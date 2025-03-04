@@ -33,7 +33,7 @@ MARKET_TICKERS = {
 }
 
 # Replace with your Alpha Vantage API key
-ALPHA_VANTAGE_API_KEY = "NZ8IP791ZRUHK4LL"
+ALPHA_VANTAGE_API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"  # Replace with your actual API key
 
 def fetch_stock_data(ticker, start_date, end_date):
     min_days = 10  # Minimum days needed for preprocessing
@@ -97,15 +97,18 @@ def prepare_data(df, look_back=5):
     
     try:
         # Add technical indicators with fill to minimize NaN loss
-        df['MA3'] = df['Close'].rolling(window=3, min_periods=1).mean().fillna(method='bfill')
-        df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean().fillna(method='bfill')
+        df['MA3'] = df['Close'].rolling(window=3, min_periods=1).mean().bfill()  # Use bfill() instead of fillna(method='bfill')
+        df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean().bfill()  # Use bfill() instead of fillna(method='bfill')
+        
+        # Calculate RSI
         rsi_series = rsi(df['Close'], length=5)
-        if not isinstance(rsi_series, pd.Series):
-            st.error("RSI did not return a pandas Series")
+        if rsi_series is None:
+            st.error("RSI calculation failed. Please check the input data.")
             return None, None, None
-        df['RSI'] = rsi_series.fillna(method='bfill')
+        
+        df['RSI'] = rsi_series.bfill()  # Use bfill() instead of fillna(method='bfill')
     except Exception as e:
-        st.error(f"Error calculating RSI: {e}")
+        st.error(f"Error calculating technical indicators: {e}")
         return None, None, None
     
     if len(df) < 2:
