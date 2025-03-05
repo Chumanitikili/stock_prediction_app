@@ -28,24 +28,29 @@ def download_stock_data(ticker, start_date, end_date):
 
 def prepare_data(df, look_back=60):
     """
-    Prepare data for LSTM model with improved error handling.
+    Prepare data for LSTM model with robust NaN checking.
     """
-    # Check if dataframe is None or empty
-    if df is None or df.empty:
-        st.error("No data available to prepare")
+    # Prefer .isnull().any() instead of .isna().any()
+    if df['Close'].isnull().any():
+        st.error("Close price contains NaN values")
         return None, None, None
     
-    # Drop rows with NaN values and reset index
-    df_cleaned = df.dropna().reset_index()
-    
-    # Check if there's enough data after cleaning
-    if len(df_cleaned) < look_back + 1:
-        st.error(f"Need at least {look_back + 1} days of data")
+    # Alternatively, you can use more explicit methods:
+    # Method 1: Checking NaN values
+    if df['Close'].hasnans:
+        st.error("Close price contains NaN values")
         return None, None, None
     
-    # Use Close price for prediction
-    close_prices = df_cleaned['Close'].values
+    # Method 2: Explicit null check
+    if df['Close'].isnull().sum() > 0:
+        st.error("Close price contains NaN values")
+        return None, None, None
     
+    # Rest of your existing data preparation code
+    close_prices = df['Close'].values
+    
+    # Further processing...
+    return X, y, scaler    
     # Normalize the data
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_prices = scaler.fit_transform(close_prices.reshape(-1, 1))
